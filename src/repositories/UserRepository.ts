@@ -1,0 +1,137 @@
+import { ObjectId } from 'mongodb';
+import { connectToDatabase, getDb } from '../database/connection';
+import { IUser } from '../models/User';
+import { logger } from '../utils/logger';
+
+// Simple helper function to convert MongoDB _id to string
+function mapUser(user: any): IUser | null {
+  if (!user) return null;
+  return {
+    ...user,
+    _id: user._id?.toString(),
+  };
+}
+
+export async function findUserByTelegramId(telegramId: number): Promise<IUser | null> {
+  await connectToDatabase();
+  const collection = getDb().collection('users');
+  const user = await collection.findOne({ telegramId });
+  return mapUser(user);
+}
+
+export async function findUserById(id: string): Promise<IUser | null> {
+  try {
+    await connectToDatabase();
+    const collection = getDb().collection('users');
+    const objectId = new ObjectId(id);
+    const user = await collection.findOne({ _id: objectId });
+    return mapUser(user);
+  } catch (error) {
+    logger.error('Error finding user by ID', 'USER', { error, id });
+    return null;
+  }
+}
+
+export async function findAllUsers(filter: any = {}): Promise<IUser[]> {
+  await connectToDatabase();
+  const collection = getDb().collection('users');
+  const users = await collection.find(filter).toArray();
+  return users.map(user => mapUser(user)).filter((user): user is IUser => user !== null);
+}
+
+/**
+ * Find all users (since registration is now automatic, all users are considered accepted)
+ */
+export async function findAllAcceptedUsers(): Promise<IUser[]> {
+  try {
+    await connectToDatabase();
+    const collection = getDb().collection('users');
+    const users = await collection.find({}).toArray();
+
+    return users.map(user => mapUser(user)).filter((user): user is IUser => user !== null);
+  } catch (error) {
+    logger.error('Error finding users', 'USER', { error });
+    return [];
+  }
+}
+
+export async function createOrUpdateUser(userData: {
+  telegramId: number;
+  username?: string;
+  referrerId?: string;
+}): Promise<IUser> {
+  await connectToDatabase();
+  const collection = getDb().collection('users');
+  const now = new Date();
+
+  // Check if user already exists
+  const existingUser = await collection.findOne({ telegramId: userData.telegramId });
+
+  if (existingUser) {
+    // Update existing user
+    const updateData = {
+      ...userData,
+      updatedAt: now,
+    };
+
+    const result = await collection.findOneAndUpdate(
+      { telegramId: userData.telegramId },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    const mappedUser = mapUser(result);
+    if (!mappedUser) {
+      throw new Error('Failed to update user');
+    }
+    return mappedUser;
+  } else {
+    // Create new user
+    const newUser = {
+      telegramId: userData.telegramId,
+      username: userData.username,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const result = await collection.insertOne(newUser);
+    return { ...newUser, _id: result.insertedId.toString() };
+  }
+}
+
+export async function updateUser(id: string, userData: Partial<IUser>): Promise<IUser | null> {
+  try {
+    await connectToDatabase();
+    const collection = getDb().collection('users');
+    const objectId = new ObjectId(id);
+
+    const updateData = {
+      ...userData,
+      updatedAt: new Date(),
+    };
+
+    const result = await collection.findOneAndUpdate(
+      { _id: objectId },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    return mapUser(result);
+  } catch (error) {
+    logger.error('Error updating user', 'USER', { error, id });
+    return null;
+  }
+}
+
+export async function deleteUser(id: string): Promise<boolean> {
+  try {
+    await connectToDatabase();
+    const collection = getDb().collection('users');
+    const objectId = new ObjectId(id);
+    const result = await collection.deleteOne({ _id: objectId });
+    return result.deletedCount === 1;
+  } catch (error) {
+    logger.error('Error deleting user', 'USER', { error, id });
+    return false;
+  }
+}
